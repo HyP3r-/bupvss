@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+
+# bupvss
+# Copyright (C) 2016 Andreas Fendt
+# 
+# This program is free software; you can redistribute it and/or modify it under
+# the terms of the GNU General Public License as published by the Free Software
+# Foundation; either version 2 of the License, or (at your option) any later 
+# version.
+# 
+# This program is distributed in the hope that it will be useful, but WITHOUT 
+# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
+# FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+# 
+# You should have received a copy of the GNU General Public License along with
+# this program; if not, write to the Free Software Foundation, Inc., 51 Franklin
+# St, Fifth Floor, Boston, MA 02110, USA
+
+# source configuration
+source config
+    
+# variables
+tmp_file="/tmp/vshadow.txt"
+
+# export some variables
+export BUP_DIR=$BACKUP_DESINATION
+export PATH="/cygdrive/C/Program\ Files\ \(x86\)/Microsoft\ SDKs/Windows/v7.0A/Bin/x64/vsstools":$PATH
+
+# create backup
+for source_drive in $BACKUP_SOURCE_DRIVES; do
+    # create vss
+    { vshadow -p "$source_drive:" || exit 1; } > $tmp_file
+
+    # extract data
+    source_shadow=$( \
+        cat $tmp_file | \
+        egrep -o HarddiskVolumeShadowCopy[0-9]+ | \
+        tail -n 1
+    )
+    uuid_shadow=$( \
+        cat $tmp_file | \
+        grep "SNAPSHOT ID" | \
+        egrep -i -o "\{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}"
+    )
+
+    # create the load of symlinks
+    cmd /c mklink /D "$source_drive:\\backup" "\\\\?\\GLOBALROOT\\Device\\$source_shadow\\"
+
+    # create backup
+    bup index "/cygdrive/$source_drive/backup" || exit 3
+    bup save -n "$(hostname)-$source_drive" \
+                "/cygdrive/$source_drive/backup" || exit 4
+    
+    # delete shadow copy
+    vshadow -ds=$uuid_shadow
+done
+
+# create paritys
+bup fsck -g || exit 5
+
+# clean up
+rm -f $tmp_file
+
+# exit save
+exit 0
