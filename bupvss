@@ -1,65 +1,108 @@
 #!/usr/bin/env bash
 
-# bupvss
-# Copyright (C) 2016 Andreas Fendt
-# 
-# This program is free software; you can redistribute it and/or modify it under
-# the terms of the GNU General Public License as published by the Free Software
-# Foundation; either version 2 of the License, or (at your option) any later 
-# version.
-# 
-# This program is distributed in the hope that it will be useful, but WITHOUT 
-# ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS 
-# FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
-# 
-# You should have received a copy of the GNU General Public License along with
-# this program; if not, write to the Free Software Foundation, Inc., 51 Franklin
-# St, Fifth Floor, Boston, MA 02110, USA
+# bupvss 0.1
+# Author: Andreas Fendt <mail@andreas-fendt.de>
+#
+# Copyright (c) 2016
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License version 2 as
+# published by the Free Software Foundation.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+# See the GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
+
+# check for help
+if [ "$1" == "--help" ] || [ "$1" == "-help" ] || [ "$1" == "-?" ] ; then
+    echo "bup 0.1, Copyright (C) 2016  Andreas Fendt"
+    echo ""
+    echo "With this script you can backup your computer with bup and volume"
+    echo "shadow copy. To configure this script you have to adjust the"
+    echo "variables starting with BACKUP_ in this script."
+    echo ""
+    echo "Return Error Levels:"
+    echo "1: No bup executable found"
+    echo "2: No vshadow executable found (you may have to install the Microsoft"
+    echo "   Windows Software Development Kit (SDK)"
+    echo "3: Failed to create the volume shadow copy"
+    echo "4: Failed to mount the volume shadow copy"
+    echo "5: Failed to index the files inside the volume shadow copy"
+    echo "6: Failed to save the files inside the volume shadow copy"
+    echo "7: Failed to mount the volume shadow copy"
+    echo "8: Failed to create the parity files"
+    exit 0
+fi
 
 # source configuration
-source config
+BACKUP_DESINATION="/cygdrive/d/Backup/GFS-3"
+BACKUP_SOURCE_DRIVES="C"
+BACKUP_TMP_LETTER="H"
+BACKUP_CYGDRIVE="/cygdrive"
+BACKUP_VSHADOW_PATH="$BACKUP_CYGDRIVE/C/Program Files (x86)/Microsoft SDKs/Windows/v7.0A/Bin/x64/vsstools"
     
-# variables
-tmp_file="/tmp/vshadow.txt"
-
 # export some variables
 export BUP_DIR=$BACKUP_DESINATION
-export PATH="/cygdrive/C/Program\ Files\ \(x86\)/Microsoft\ SDKs/Windows/v7.0A/Bin/x64/vsstools":$PATH
+export PATH="$BACKUP_VSHADOW_PATH":$PATH
+
+# extract path
+BACKUP_BUP=$(which bup)
+BACKUP_VSHADOW=$(which vshadow)
+
+# check for bup
+if ! [ -x "$BACKUP_BUP" ] ; then
+    echo "No bup executable found"
+    exit 1
+fi
+
+# check for vshadow
+if ! [ -x "$BACKUP_VSHADOW" ] ; then
+    echo "No vshadow executable found"
+    exit 2
+fi
+
+# show status
+echo "Starting backup of $BACKUP_SOURCE_DRIVES"
+echo "With temporary drive letter $BACKUP_TMP_LETTER"
+
 
 # create backup
 for source_drive in $BACKUP_SOURCE_DRIVES; do
     # create vss
-    { vshadow -p "$source_drive:" || exit 1; } > $tmp_file
+    echo ""
+    echo "Process partition $source_drive"
+    echo "  Step 1: Creating volume shadow copy $source_drive"
+    "$BACKUP_VSHADOW" -script=config.bat -p "$source_drive:" > /dev/null || exit 3
 
-    # extract data
-    source_shadow=$( \
-        cat $tmp_file | \
-        egrep -o HarddiskVolumeShadowCopy[0-9]+ | \
-        tail -n 1
-    )
-    uuid_shadow=$( \
-        cat $tmp_file | \
-        grep "SNAPSHOT ID" | \
-        egrep -i -o "\{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}"
-    )
+    # extract uuid
+    uuid_shadow=$(cat config.bat | grep "SHADOW_ID_1")
+    uuid_shadow=${uuid_shadow/SET\ SHADOW_ID_1\=/}   
 
-    # create the load of symlinks
-    cmd /c mklink /D "$source_drive:\\backup" "\\\\?\\GLOBALROOT\\Device\\$source_shadow\\"
+    # mount shadow copy
+    echo "  Step 2: Mounting volume shadow copy to $BACKUP_TMP_LETTER"
+    "$BACKUP_VSHADOW" "-el=$uuid_shadow,$BACKUP_TMP_LETTER:" > /dev/null || exit 4
 
     # create backup
-    bup index "/cygdrive/$source_drive/backup" || exit 3
-    bup save -n "$(hostname)-$source_drive" \
-                "/cygdrive/$source_drive/backup" || exit 4
+    echo "  Step 3: Creating index of all files and directories"
+    "$BACKUP_BUP" index "$BACKUP_CYGDRIVE/$BACKUP_TMP_LETTER" || exit 5
+    echo "  Step 4: Saving data into backup storage"
+    "$BACKUP_BUP" save -n "$(hostname)-$source_drive" \
+                          "$BACKUP_CYGDRIVE/$BACKUP_TMP_LETTER" || exit 6
     
     # delete shadow copy
-    vshadow -ds=$uuid_shadow
+    echo "  Step 5: Unmounting volume shadow copy"
+    "$BACKUP_VSHADOW" "-ds=$uuid_shadow" > /dev/null || exit 7
 done
 
 # create paritys
-bup fsck -g || exit 5
-
-# clean up
-rm -f $tmp_file
+echo ""
+echo "Step 6: Creating parities of backup storage"
+"$BACKUP_BUP" fsck -g > /dev/null || exit 8
 
 # exit save
 exit 0
